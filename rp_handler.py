@@ -25,23 +25,40 @@ def _ollama_chat_vision(png_bytes, prompt):
         "model": MODEL_NAME,
         "stream": False,
         "messages": [{
-            "role":"user",
-            "content":[
-                {"type":"text","text": prompt},
-                {"type":"image","image": b64img}
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64img}"}}
             ]
         }],
         "options": {"temperature": 0}
     }
-    r = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=900)
-    r.raise_for_status()
-    return r.json()
+    
+    # Add retry logic and better error handling
+    for attempt in range(3):
+        try:
+            r = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=900)
+            r.raise_for_status()
+            return r.json()
+        except requests.exceptions.RequestException as e:
+            print(f"Attempt {attempt + 1} failed: {e}")
+            if attempt == 2:  # Last attempt
+                raise
+            time.sleep(2)  # Wait before retry
 
 def handler(job):
     t0 = time.time()
     try:
         inp = job.get("input") or {}
         prompt = inp.get("prompt") or "Extract Thai/English text with structure (headings, lists, tables). Return natural text."
+        
+        # Check if Ollama is ready
+        try:
+            health_check = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=5)
+            health_check.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            return {"ok": False, "error": f"Ollama service not ready: {str(e)}"}
+        
         png = _to_png(_load_image(inp))
         res = _ollama_chat_vision(png, prompt)
         text = res.get("message", {}).get("content", "")
