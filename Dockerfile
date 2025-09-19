@@ -1,9 +1,12 @@
 FROM python:3.11-slim
 
-# install curl to fetch ollama
-RUN apt-get update && apt-get install -y curl ca-certificates && rm -rf /var/lib/apt/lists/*
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# install ollama
+# Install Ollama binary directly
 RUN curl -fsSL https://ollama.com/install.sh | sh
 
 WORKDIR /app

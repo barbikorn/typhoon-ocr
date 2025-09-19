@@ -34,12 +34,16 @@ def _ollama_chat_vision(png_bytes, prompt):
         "options": {"temperature": 0}
     }
     
-    # Add retry logic and better error handling
+    # Add retry logic with shorter timeout for serverless
     for attempt in range(3):
         try:
-            r = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=900)
+            r = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=300)
             r.raise_for_status()
             return r.json()
+        except requests.exceptions.Timeout:
+            print(f"Attempt {attempt + 1} timed out after 300 seconds")
+            if attempt == 2:
+                raise Exception("Ollama request timed out after 3 attempts")
         except requests.exceptions.RequestException as e:
             print(f"Attempt {attempt + 1} failed: {e}")
             if attempt == 2:  # Last attempt
@@ -52,16 +56,20 @@ def handler(job):
         inp = job.get("input") or {}
         prompt = inp.get("prompt") or "Extract Thai/English text with structure (headings, lists, tables). Return natural text."
         
-        # Check if Ollama is ready
+        # Check if Ollama is ready with better error handling
         try:
-            health_check = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=5)
+            health_check = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=10)
             health_check.raise_for_status()
         except requests.exceptions.RequestException as e:
             return {"ok": False, "error": f"Ollama service not ready: {str(e)}"}
         
+        # Load and process image
         png = _to_png(_load_image(inp))
+        
+        # Call Ollama vision API
         res = _ollama_chat_vision(png, prompt)
         text = res.get("message", {}).get("content", "")
+        
         return {
             "ok": True,
             "model": MODEL_NAME,
@@ -69,6 +77,7 @@ def handler(job):
             "output_text": text
         }
     except Exception as e:
+        print(f"Handler error: {str(e)}")
         return {"ok": False, "error": str(e)}
 
 runpod.serverless.start({"handler": handler})
