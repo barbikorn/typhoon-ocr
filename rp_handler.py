@@ -1,7 +1,6 @@
 import os, io, base64, json, time, requests
 from PIL import Image
 import runpod
-from typhoon_ocr import ocr_document
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 MODEL_NAME  = os.environ.get("MODEL_NAME", "scb10x/typhoon-ocr-7b")
@@ -22,7 +21,7 @@ def _to_png(img_bytes):
 
 def _get_typhoon_prompt(prompt_type="default", base_text=""):
     """Get the specific prompt required by Typhoon OCR model"""
-    prompts = {
+    PROMPTS_SYS = {
         "default": lambda base_text: (f"Below is an image of a document page along with its dimensions. "
             f"Simply return the markdown representation of this document, presenting tables in markdown format as they naturally appear.\n"
             f"If the document contains images, use a placeholder like dummy.png for each image.\n"
@@ -37,7 +36,7 @@ def _get_typhoon_prompt(prompt_type="default", base_text=""):
             f"RAW_TEXT_START\n{base_text}\nRAW_TEXT_END"
         ),
     }
-    return prompts.get(prompt_type, prompts["default"])(base_text)
+    return PROMPTS_SYS.get(prompt_type, PROMPTS_SYS["default"])(base_text)
 
 def _ollama_chat_vision(png_bytes, prompt_type="default", base_text=""):
     """Call Typhoon OCR model with proper parameters"""
@@ -83,6 +82,7 @@ def handler(job):
         inp = job.get("input") or {}
         prompt_type = inp.get("prompt_type", "default")  # "default" or "structure"
         base_text = inp.get("base_text", "")  # Optional base text for structure mode
+        pdf_path = inp.get("pdf_path", "")  # Optional PDF path for get_anchor_text
         
         # Check if Ollama is ready with better error handling
         try:
@@ -93,6 +93,17 @@ def handler(job):
         
         # Load and process image
         png = _to_png(_load_image(inp))
+        
+        # Extract base_text from PDF metadata if pdf_path is provided and base_text is empty
+        if pdf_path and not base_text:
+            try:
+                # For now, we'll use empty base_text since typhoon-ocr package is not available
+                # In production, you would need to implement PDF text extraction
+                base_text = ""
+                print(f"PDF path provided but base_text extraction not implemented: {pdf_path}")
+            except Exception as e:
+                print(f"Warning: Could not extract base_text from PDF: {e}")
+                base_text = ""
         
         # Call Typhoon OCR model
         res = _ollama_chat_vision(png, prompt_type, base_text)
@@ -111,7 +122,8 @@ def handler(job):
             "model": MODEL_NAME,
             "elapsed_sec": round(time.time()-t0, 3),
             "output_text": output_text,
-            "prompt_type": prompt_type
+            "prompt_type": prompt_type,
+            "base_text_length": len(base_text)
         }
     except Exception as e:
         print(f"Handler error: {str(e)}")
