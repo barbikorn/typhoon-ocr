@@ -1,6 +1,7 @@
 import os, io, base64, json, time, requests
 from PIL import Image
 import runpod
+from typhoon_ocr import ocr_document
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 MODEL_NAME  = os.environ.get("MODEL_NAME", "scb10x/typhoon-ocr-7b")
@@ -19,19 +20,45 @@ def _to_png(img_bytes):
     buf = io.BytesIO(); im.save(buf, format="PNG")
     return buf.getvalue()
 
-def _ollama_chat_vision(png_bytes, prompt):
+def _get_typhoon_prompt(prompt_type="default", base_text=""):
+    """Get the specific prompt required by Typhoon OCR model"""
+    prompts = {
+        "default": lambda base_text: (f"Below is an image of a document page along with its dimensions. "
+            f"Simply return the markdown representation of this document, presenting tables in markdown format as they naturally appear.\n"
+            f"If the document contains images, use a placeholder like dummy.png for each image.\n"
+            f"Your final output must be in JSON format with a single key `natural_text` containing the response.\n"
+            f"RAW_TEXT_START\n{base_text}\nRAW_TEXT_END"),
+        "structure": lambda base_text: (
+            f"Below is an image of a document page, along with its dimensions and possibly some raw textual content previously extracted from it. "
+            f"Note that the text extraction may be incomplete or partially missing. Carefully consider both the layout and any available text to reconstruct the document accurately.\n"
+            f"Your task is to return the markdown representation of this document, presenting tables in HTML format as they naturally appear.\n"
+            f"If the document contains images or figures, analyze them and include the tag <figure>IMAGE_ANALYSIS</figure> in the appropriate location.\n"
+            f"Your final output must be in JSON format with a single key `natural_text` containing the response.\n"
+            f"RAW_TEXT_START\n{base_text}\nRAW_TEXT_END"
+        ),
+    }
+    return prompts.get(prompt_type, prompts["default"])(base_text)
+
+def _ollama_chat_vision(png_bytes, prompt_type="default", base_text=""):
+    """Call Typhoon OCR model with proper parameters"""
     b64img = base64.b64encode(png_bytes).decode("utf-8")
+    typhoon_prompt = _get_typhoon_prompt(prompt_type, base_text)
+    
     payload = {
         "model": MODEL_NAME,
         "stream": False,
         "messages": [{
             "role": "user",
             "content": [
-                {"type": "text", "text": prompt},
+                {"type": "text", "text": typhoon_prompt},
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64img}"}}
             ]
         }],
-        "options": {"temperature": 0}
+        "options": {
+            "temperature": 0.1,
+            "top_p": 0.6,
+            "repetition_penalty": 1.2
+        }
     }
     
     # Add retry logic with shorter timeout for serverless
@@ -54,7 +81,8 @@ def handler(job):
     t0 = time.time()
     try:
         inp = job.get("input") or {}
-        prompt = inp.get("prompt") or "Extract Thai/English text with structure (headings, lists, tables). Return natural text."
+        prompt_type = inp.get("prompt_type", "default")  # "default" or "structure"
+        base_text = inp.get("base_text", "")  # Optional base text for structure mode
         
         # Check if Ollama is ready with better error handling
         try:
@@ -66,15 +94,24 @@ def handler(job):
         # Load and process image
         png = _to_png(_load_image(inp))
         
-        # Call Ollama vision API
-        res = _ollama_chat_vision(png, prompt)
-        text = res.get("message", {}).get("content", "")
+        # Call Typhoon OCR model
+        res = _ollama_chat_vision(png, prompt_type, base_text)
+        response_content = res.get("message", {}).get("content", "")
+        
+        # Try to parse JSON response from Typhoon OCR
+        try:
+            parsed_response = json.loads(response_content)
+            output_text = parsed_response.get("natural_text", response_content)
+        except json.JSONDecodeError:
+            # If not JSON, use raw content
+            output_text = response_content
         
         return {
             "ok": True,
             "model": MODEL_NAME,
             "elapsed_sec": round(time.time()-t0, 3),
-            "output_text": text
+            "output_text": output_text,
+            "prompt_type": prompt_type
         }
     except Exception as e:
         print(f"Handler error: {str(e)}")
