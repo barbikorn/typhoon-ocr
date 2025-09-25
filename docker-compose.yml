@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  typhoon-ocr:
+    build: .
+    ports:
+      - "11434:11434"
+    environment:
+      - MODEL_NAME=scb10x/typhoon-ocr-7b
+      - OLLAMA_HOST=http://127.0.0.1:11434
+      - OLLAMA_NUM_PARALLEL=1
+    volumes:
+      - ./test_images:/app/test_images
+    restart: unless-stopped

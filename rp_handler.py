@@ -12,7 +12,6 @@ def _load_image(inp):
         r = requests.get(inp["image_url"], timeout=30)
         r.raise_for_status()
         return r.content
-    
     raise ValueError("Provide image_b64 or image_url")
 
 def _to_png(img_bytes):
